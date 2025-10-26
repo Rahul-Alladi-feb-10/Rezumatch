@@ -30,22 +30,25 @@ def upload_resume(request):
         # Parse document
         raw_text, file_type = DocumentParser.parse_document(file_obj, filename)
         
-        # Clean text
+        # Clean text - normalize whitespace first
         cleaner = TextCleaner()
-        cleaned_text = cleaner.full_preprocessing(raw_text)
+        normalized_text = cleaner.normalize_whitespace(raw_text)
         
-        # Extract sections
+        # Extract sections first (for context-aware extraction)
         extractor = SectionExtractor()
-        sections = extractor.extract_sections(raw_text)
+        sections = extractor.extract_sections(normalized_text)
         
-        # Extract structured data
+        # Extract structured data with section context
         extracted_data = {
-            'skills': extractor.extract_skills(raw_text),
-            'education': extractor.extract_education(raw_text),
-            'experience': extractor.extract_experience(raw_text),
-            'contact': extractor.extract_contact_info(raw_text),
-            'keywords': cleaner.extract_keywords(cleaned_text)
+            'skills': extractor.extract_skills(normalized_text, sections),
+            'education': extractor.extract_education(normalized_text, sections),
+            'experience': extractor.extract_experience(normalized_text, sections),
+            'contact': extractor.extract_contact_info(normalized_text),
         }
+        
+        # Clean text for vectorization (done after extraction to preserve structure)
+        cleaned_text = cleaner.full_preprocessing(normalized_text)
+        extracted_data['keywords'] = cleaner.extract_keywords(cleaned_text)
         
         # Save to database
         resume_id = ResumeModel.create_resume({

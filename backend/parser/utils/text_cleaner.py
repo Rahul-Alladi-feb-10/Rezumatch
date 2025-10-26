@@ -24,6 +24,28 @@ class TextCleaner:
         self.stop_words = set(stopwords.words('english'))
         self.lemmatizer = WordNetLemmatizer()
     
+    def normalize_whitespace(self, text):
+        """
+        Normalize excessive whitespace and newlines
+        
+        :param text: Input text
+        :return: Normalized text
+        """
+        # Replace multiple newlines with double newline
+        text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+        
+        # Replace multiple spaces with single space
+        text = re.sub(r' +', ' ', text)
+        
+        # Remove spaces before newlines
+        text = re.sub(r' +\n', '\n', text)
+        
+        # Remove trailing/leading whitespace from each line
+        lines = [line.strip() for line in text.split('\n')]
+        text = '\n'.join(lines)
+        
+        return text.strip()
+    
     def clean_text(self, text, preserve_case=False):
         """
         Clean and preprocess text
@@ -32,17 +54,20 @@ class TextCleaner:
         :param preserve_case: Whether to preserve case (useful for NER)
         :return: Cleaned text
         """
-        # Remove extra whitespace
-        text = ' '.join(text.split())
+        # First normalize whitespace
+        text = self.normalize_whitespace(text)
         
         # Remove URLs
         text = re.sub(r'http\S+|www\S+', '', text)
         
-        # Remove email addresses
-        text = re.sub(r'\S+@\S+', '', text)
+        # Remove email addresses (but save them separately if needed)
+        # text = re.sub(r'\S+@\S+', '', text)
         
         # Remove special characters but keep important punctuation
-        text = re.sub(r'[^a-zA-Z0-9\s\.\,\-\(\)]', '', text)
+        text = re.sub(r'[^a-zA-Z0-9\s\.\,\-\(\)\+\@]', ' ', text)
+        
+        # Remove multiple spaces again after cleaning
+        text = re.sub(r' +', ' ', text)
         
         # Convert to lowercase if not preserving case
         if not preserve_case:
