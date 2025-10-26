@@ -3,10 +3,11 @@
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
-from .models import ResumeModel, JobDescriptionModel
+from .models import ResumeModel, JobDescriptionModel, MatchResultModel
 from .utils.file_parser import DocumentParser
 from .utils.text_cleaner import TextCleaner
 from .utils.section_extractor import SectionExtractor
+from .utils.matcher import ResumeJobMatcher
 
 
 @api_view(['POST'])
@@ -68,9 +69,11 @@ def upload_resume(request):
                 'file_type': file_type,
                 'sections_found': list(sections.keys()),
                 'skills_extracted': extracted_data['skills'],
-                'education_entries': len(extracted_data['education']),
-                'experience_entries': len(extracted_data['experience']),
-                'contact_info': extracted_data['contact']
+                'skills_count': len(extracted_data['skills']),
+                'education_count': len(extracted_data['education']),
+                'experience_count': len(extracted_data['experience']),
+                'contact_info': extracted_data['contact'],
+                'keywords': extracted_data['keywords'][:10]  # Top 10 keywords
             }
         }, status=status.HTTP_201_CREATED)
     
@@ -79,6 +82,223 @@ def upload_resume(request):
             {'error': str(e)},
             status=status.HTTP_400_BAD_REQUEST
         )
+    except Exception as e:
+        return Response(
+            {'error': f'An error occurred: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+# ============================================
+# MATCHING ENDPOINTS (Step 2)
+# ============================================
+
+@api_view(['POST'])
+def match_resume_to_job(request):
+    """
+    Match a single resume to a single job description
+    
+    Expected JSON: {
+        "resume_id": "...",
+        "job_id": "..."
+    }
+    """
+    try:
+        resume_id = request.data.get('resume_id')
+        job_id = request.data.get('job_id')
+        
+        if not resume_id or not job_id:
+            return Response(
+                {'error': 'Both resume_id and job_id are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Fetch resume and job
+        resume = ResumeModel.get_resume_by_id(resume_id)
+        job = JobDescriptionModel.get_job_by_id(job_id)
+        
+        if not resume:
+            return Response(
+                {'error': 'Resume not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        if not job:
+            return Response(
+                {'error': 'Job description not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Perform matching
+        matcher = ResumeJobMatcher()
+        match_result = matcher.match(resume, job)
+        
+        # Save match result to database
+        match_id = MatchResultModel.create_match(
+            resume_id=resume_id,
+            job_id=job_id,
+            scores={
+                'overall_score': match_result['overall_score'],
+                'keyword_score': match_result['component_scores']['keyword_match'],
+                'semantic_score': match_result['component_scores']['semantic_match'],
+                'experience_score': match_result['component_scores']['experience_match']
+            },
+            details={
+                'matching_skills': match_result['skills_details']['matching_skills'],
+                'missing_skills': match_result['skills_details']['missing_skills'],
+                'fuzzy_matches': match_result['skills_details'].get('fuzzy_matches', []),
+                'match_quality': match_result['match_quality']
+            }
+        )
+        
+        return Response({
+            'message': 'Matching completed successfully',
+            'match_id': match_id,
+            'result': match_result
+        }, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        return Response(
+            {'error': f'An error occurred: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+def match_resume_to_all_jobs(request):
+    """
+    Match a single resume to all job descriptions
+    
+    Expected JSON: {
+        "resume_id": "..."
+    }
+    """
+    try:
+        resume_id = request.data.get('resume_id')
+        
+        if not resume_id:
+            return Response(
+                {'error': 'resume_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Fetch resume
+        resume = ResumeModel.get_resume_by_id(resume_id)
+        
+        if not resume:
+            return Response(
+                {'error': 'Resume not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Fetch all jobs
+        jobs = JobDescriptionModel.get_all_jobs()
+        
+        if not jobs:
+            return Response(
+                {'error': 'No job descriptions found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Perform batch matching
+        matcher = ResumeJobMatcher()
+        results = matcher.batch_match(resume, jobs)
+        
+        # Save top matches to database
+        for result in results[:10]:  # Save top 10 matches
+            MatchResultModel.create_match(
+                resume_id=resume_id,
+                job_id=result['job_id'],
+                scores={
+                    'overall_score': result['overall_score'],
+                    'keyword_score': result['component_scores']['keyword_match'],
+                    'semantic_score': result['component_scores']['semantic_match'],
+                    'experience_score': result['component_scores']['experience_match']
+                },
+                details={
+                    'matching_skills': result['skills_details']['matching_skills'],
+                    'missing_skills': result['skills_details']['missing_skills'],
+                    'match_quality': result['match_quality']
+                }
+            )
+        
+        return Response({
+            'message': 'Batch matching completed successfully',
+            'total_jobs_matched': len(results),
+            'results': results
+        }, status=status.HTTP_200_OK)
+    
+    except Exception as e:
+        return Response(
+            {'error': f'An error occurred: {str(e)}'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+def match_job_to_all_resumes(request):
+    """
+    Match a single job to all resumes (for recruiters)
+    
+    Expected JSON: {
+        "job_id": "..."
+    }
+    """
+    try:
+        job_id = request.data.get('job_id')
+        
+        if not job_id:
+            return Response(
+                {'error': 'job_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # Fetch job
+        job = JobDescriptionModel.get_job_by_id(job_id)
+        
+        if not job:
+            return Response(
+                {'error': 'Job description not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Fetch all resumes
+        resumes = ResumeModel.get_all_resumes()
+        
+        if not resumes:
+            return Response(
+                {'error': 'No resumes found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        
+        # Perform batch matching
+        matcher = ResumeJobMatcher()
+        results = matcher.batch_match_resumes(resumes, job)
+        
+        # Save all matches to database
+        for result in results:
+            MatchResultModel.create_match(
+                resume_id=result['resume_id'],
+                job_id=job_id,
+                scores={
+                    'overall_score': result['overall_score'],
+                    'keyword_score': result['component_scores']['keyword_match'],
+                    'semantic_score': result['component_scores']['semantic_match'],
+                    'experience_score': result['component_scores']['experience_match']
+                },
+                details={
+                    'matching_skills': result['skills_details']['matching_skills'],
+                    'missing_skills': result['skills_details']['missing_skills'],
+                    'match_quality': result['match_quality']
+                }
+            )
+        
+        return Response({
+            'message': 'Batch matching completed successfully',
+            'total_resumes_matched': len(results),
+            'results': results
+        }, status=status.HTTP_200_OK)
+    
     except Exception as e:
         return Response(
             {'error': f'An error occurred: {str(e)}'},
@@ -118,17 +338,20 @@ def upload_job_description(request):
         
         # Clean text
         cleaner = TextCleaner()
-        cleaned_text = cleaner.full_preprocessing(raw_text)
+        normalized_text = cleaner.normalize_whitespace(raw_text)
         
         # Extract sections
         extractor = SectionExtractor()
-        sections = extractor.extract_sections(raw_text)
+        sections = extractor.extract_sections(normalized_text)
         
         # Extract structured data
         extracted_data = {
-            'required_skills': extractor.extract_skills(raw_text),
-            'keywords': cleaner.extract_keywords(cleaned_text)
+            'required_skills': extractor.extract_skills(normalized_text, sections),
         }
+        
+        # Clean for vectorization
+        cleaned_text = cleaner.full_preprocessing(normalized_text)
+        extracted_data['keywords'] = cleaner.extract_keywords(cleaned_text)
         
         # Save to database
         job_id = JobDescriptionModel.create_job({

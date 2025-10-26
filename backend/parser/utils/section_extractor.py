@@ -200,57 +200,70 @@ class SectionExtractor:
         if sections and 'education' in sections:
             search_text = sections['education']
         
-        # Look for degree patterns
-        degree_patterns = [
-            r"(?:bachelor|master|phd|doctorate|associate)(?:'?s)?(?:\s+(?:of|in|degree))?\s+\w+",
-            r"b\.?s\.?(?:\s+in\s+\w+)?",
-            r"m\.?s\.?(?:\s+in\s+\w+)?",
-            r"b\.?a\.?(?:\s+in\s+\w+)?",
-            r"m\.?a\.?(?:\s+in\s+\w+)?",
-            r"b\.?tech(?:\s+in\s+\w+)?",
-            r"m\.?tech(?:\s+in\s+\w+)?",
-            r"b\.?e\.?(?:\s+in\s+\w+)?",
-            r"m\.?e\.?(?:\s+in\s+\w+)?"
-        ]
-        
+        # Split by double newlines or obvious institution markers
         lines = search_text.split('\n')
         current_education = []
+        found_institution = False
         
-        for line in lines:
+        # Patterns for institutions
+        institution_patterns = [
+            r'university', r'college', r'institute', r'school', r'academy'
+        ]
+        
+        # Degree patterns
+        degree_patterns = [
+            r"(?:bachelor|master|phd|doctorate|associate)(?:'?s)?",
+            r"b\.?\s*s\.?", r"m\.?\s*s\.?", r"b\.?\s*a\.?", r"m\.?\s*a\.?",
+            r"b\.?\s*tech", r"m\.?\s*tech", r"b\.?\s*e\.?", r"m\.?\s*e\.?"
+        ]
+        
+        for i, line in enumerate(lines):
             line = line.strip()
             if not line:
-                if current_education:
+                # Empty line might indicate end of education entry
+                if current_education and found_institution:
                     education.append('\n'.join(current_education))
                     current_education = []
+                    found_institution = False
                 continue
             
             line_lower = line.lower()
             
-            # Check if this line contains a degree
-            has_degree = False
-            for pattern in degree_patterns:
-                if re.search(pattern, line_lower):
-                    has_degree = True
-                    break
+            # Check if line contains institution name
+            has_institution = any(re.search(pattern, line_lower) for pattern in institution_patterns)
             
-            # If line has degree or institution name, start new entry
-            if has_degree or re.search(r'university|college|institute|school', line_lower):
+            # Check if line contains degree
+            has_degree = any(re.search(pattern, line_lower) for pattern in degree_patterns)
+            
+            # If we find an institution, start a new education block
+            if has_institution:
+                if current_education and found_institution:
+                    # Save previous education
+                    education.append('\n'.join(current_education))
+                # Start new education block
+                current_education = [line]
+                found_institution = True
+            elif has_degree and not found_institution:
+                # Degree line without institution yet - start new block
                 if current_education:
                     education.append('\n'.join(current_education))
                 current_education = [line]
+                found_institution = True
             elif current_education:
                 # Add to current education entry
-                current_education.append(line)
+                # But don't add if it looks like start of another section
+                if not re.search(r'^(experience|skills|projects|certifications):', line_lower):
+                    current_education.append(line)
         
         # Add last entry
-        if current_education:
+        if current_education and found_institution:
             education.append('\n'.join(current_education))
         
         return education
     
     def extract_experience(self, text, sections=None):
         """
-        Extract work experience with improved date matching
+        Extract work experience with improved date matching and job title detection
         
         :param text: Resume text
         :param sections: Pre-extracted sections (optional)
@@ -266,40 +279,49 @@ class SectionExtractor:
         # Improved date patterns to match various formats
         date_patterns = [
             r'\d{4}\s*[-–—]\s*(?:\d{4}|present|current)',  # 2023 - 2024
-            r'(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{4}\s*[-–—]\s*(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+\d{4}|present|current)',  # March 2023 - Aug 2024
+            r'(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{4}\s*[-–—]\s*(?:(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{4}|present|current)',  # March 2023 - Aug 2024
             r'\d{1,2}/\d{4}\s*[-–—]\s*(?:\d{1,2}/\d{4}|present|current)',  # 03/2023 - 08/2024
         ]
         
+        # Job title indicators (often appears with | separator)
+        job_title_pattern = r'\b(?:developer|engineer|analyst|manager|lead|senior|junior|intern|internship|consultant|architect|designer|specialist)\b'
+        
         lines = search_text.split('\n')
         current_exp = []
+        found_date_or_title = False
         
         for line in lines:
             line = line.strip()
             if not line:
-                if current_exp:
+                # Empty line - end of experience entry
+                if current_exp and found_date_or_title:
                     experiences.append('\n'.join(current_exp))
                     current_exp = []
+                    found_date_or_title = False
                 continue
             
             line_lower = line.lower()
             
             # Check if line contains a date range
-            has_date = False
-            for pattern in date_patterns:
-                if re.search(pattern, line_lower):
-                    has_date = True
-                    break
+            has_date = any(re.search(pattern, line_lower) for pattern in date_patterns)
             
-            if has_date:
+            # Check if line looks like job title (contains job keywords and possibly |)
+            has_job_title = re.search(job_title_pattern, line_lower) and ('|' in line or len(line) < 80)
+            
+            if has_date or (has_job_title and not current_exp):
                 # Start new experience entry
-                if current_exp:
+                if current_exp and found_date_or_title:
                     experiences.append('\n'.join(current_exp))
                 current_exp = [line]
+                found_date_or_title = True
             elif current_exp:
-                current_exp.append(line)
+                # Add to current experience
+                # Don't add if it looks like start of another section
+                if not re.search(r'^(education|skills|projects|certifications):', line_lower):
+                    current_exp.append(line)
         
         # Add last experience
-        if current_exp:
+        if current_exp and found_date_or_title:
             experiences.append('\n'.join(current_exp))
         
         return experiences
@@ -317,11 +339,18 @@ class SectionExtractor:
             'linkedin': None
         }
         
-        # Improved email pattern
-        email_pattern = r'\b[A-Za-z0-9][A-Za-z0-9._%+-]*@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+        # Improved email pattern - must start with alphanumeric, not just digit
+        email_pattern = r'\b[A-Za-z][A-Za-z0-9._%+-]*@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
         email_match = re.search(email_pattern, text)
         if email_match:
             contact['email'] = email_match.group()
+        
+        # If no email found with strict pattern, try more permissive (allows starting with digit)
+        if not contact['email']:
+            email_pattern_permissive = r'\b[A-Za-z0-9][A-Za-z0-9._%+-]{2,}@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+            email_match = re.search(email_pattern_permissive, text)
+            if email_match:
+                contact['email'] = email_match.group()
         
         # Improved phone pattern
         phone_pattern = r'[\+]?[(]?[0-9]{1,4}[)]?[-\s\.]?[(]?[0-9]{1,4}[)]?[-\s\.]?[0-9]{1,4}[-\s\.]?[0-9]{1,4}'

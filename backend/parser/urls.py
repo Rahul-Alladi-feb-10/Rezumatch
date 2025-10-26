@@ -15,4 +15,9 @@ urlpatterns = [
     path('job/<str:job_id>/', views.get_job, name='get_job'),
     path('jobs/', views.get_all_jobs, name='get_all_jobs'),
     path('job/<str:job_id>/delete/', views.delete_job, name='delete_job'),
+    
+    # Matching endpoints (Step 2)
+    path('match/', views.match_resume_to_job, name='match_resume_to_job'),
+    path('match/resume-to-jobs/', views.match_resume_to_all_jobs, name='match_resume_to_all_jobs'),
+    path('match/job-to-resumes/', views.match_job_to_all_resumes, name='match_job_to_all_resumes'),
 ]
